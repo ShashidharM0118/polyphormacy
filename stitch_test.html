@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>STITCH ID Validator Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test-case { margin: 10px 0; padding: 10px; border: 1px solid #ddd; }
+        .valid { background-color: #d4edda; }
+        .invalid { background-color: #f8d7da; }
+    </style>
+</head>
+<body>
+    <h1>STITCH ID Format Validation Test</h1>
+    
+    <div id="test-results"></div>
+    
+    <script>
+        function isValidStitchId(id) {
+            return /^CID\d{9}$/.test(id);
+        }
+        
+        const testCases = [
+            'CID000002173',     // Valid
+            'CID000003345',     // Valid
+            'CID123456789',     // Valid
+            'CID000000001',     // Valid
+            'CID00000001',      // Invalid - too short
+            'CID0000000012',    // Invalid - too long
+            'CID000ABC123',     // Invalid - contains letters
+            'cid000002173',     // Invalid - lowercase
+            '000002173',        // Invalid - missing CID prefix
+            'CID000002173X',    // Invalid - extra character
+        ];
+        
+        const resultsDiv = document.getElementById('test-results');
+        
+        testCases.forEach(testCase => {
+            const isValid = isValidStitchId(testCase);
+            const div = document.createElement('div');
+            div.className = `test-case ${isValid ? 'valid' : 'invalid'}`;
+            div.innerHTML = `
+                <strong>${testCase}</strong> - 
+                ${isValid ? '✅ VALID' : '❌ INVALID'}
+                ${isValid ? ' (Correct STITCH ID format)' : ' (Must be CID followed by 9 digits)'}
+            `;
+            resultsDiv.appendChild(div);
+        });
+    </script>
+</body>
+</html>

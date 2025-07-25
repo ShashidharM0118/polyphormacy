@@ -1,0 +1,16 @@
+{
+  "features": [
+    "STITCH_1_encoded",
+    "STITCH_2_encoded",
+    "drug_interaction_score",
+    "drug_sum",
+    "drug_diff"
+  ],
+  "targets": {
+    "binary": "has_interaction",
+    "severity": "severity_category",
+    "system": "system_category"
+  },
+  "samples": 47,
+  "created": "2025-07-25T14:28:41.636464"
+}

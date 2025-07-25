@@ -20,18 +20,48 @@
         }
         .form-group {
             margin-bottom: 20px;
+            position: relative;
         }
         label {
             display: block;
             margin-bottom: 5px;
             font-weight: bold;
         }
-        select, input, button {
+        input, button {
             width: 100%;
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
             font-size: 16px;
+            box-sizing: border-box;
+        }
+        input[type="text"] {
+            position: relative;
+        }
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 5px 5px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        .autocomplete-item {
+            padding: 10px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+        .autocomplete-item:hover {
+            background-color: #f8f9fa;
+        }
+        .autocomplete-item:last-child {
+            border-bottom: none;
         }
         button {
             background-color: #007bff;
@@ -83,26 +113,43 @@
         .severity-mild { background-color: #ffc107; }
         .severity-moderate { background-color: #fd7e14; }
         .severity-severe { background-color: #dc3545; }
+        .help-text {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        .example-ids {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🏥 Polypharmacy Drug Interaction Predictor</h1>
-        <p>This tool uses machine learning to predict potential drug interactions and their severity. Select two drugs below to analyze their interaction potential.</p>
+        <p>This tool uses machine learning to predict potential drug interactions and their severity using STITCH IDs.</p>
+        
+        <div class="example-ids">
+            <strong>Example STITCH IDs available in database:</strong><br>
+            CID000002173, CID000003345, CID000005206, CID000009433, CID000003929, CID000150610
+        </div>
         
         <form id="predictionForm">
             <div class="form-group">
-                <label for="drug1">Drug 1:</label>
-                <select id="drug1" required>
-                    <option value="">Select first drug...</option>
-                </select>
+                <label for="drug1Input">Drug 1 STITCH ID:</label>
+                <input type="text" id="drug1Input" placeholder="Type or paste STITCH ID (e.g., CID000002173)..." autocomplete="off">
+                <div id="drug1Dropdown" class="autocomplete-dropdown"></div>
+                <div class="help-text">Start typing a STITCH ID to see suggestions from our database</div>
             </div>
             
             <div class="form-group">
-                <label for="drug2">Drug 2:</label>
-                <select id="drug2" required>
-                    <option value="">Select second drug...</option>
-                </select>
+                <label for="drug2Input">Drug 2 STITCH ID:</label>
+                <input type="text" id="drug2Input" placeholder="Type or paste STITCH ID (e.g., CID000003345)..." autocomplete="off">
+                <div id="drug2Dropdown" class="autocomplete-dropdown"></div>
+                <div class="help-text">Start typing a STITCH ID to see suggestions from our database</div>
             </div>
             
             <button type="submit">🔍 Predict Interaction</button>
@@ -115,25 +162,80 @@
 
     <script>
         const API_BASE = 'http://127.0.0.1:5000';
+        let debounceTimer = null;
+        let availableDrugs = [];
         
-        // Load available drugs
+        // Load available drugs for autocomplete
         async function loadDrugs() {
             try {
                 const response = await fetch(`${API_BASE}/drugs`);
                 const data = await response.json();
-                
-                const drug1Select = document.getElementById('drug1');
-                const drug2Select = document.getElementById('drug2');
-                
-                data.drugs.forEach(drug => {
-                    const option1 = new Option(drug, drug);
-                    const option2 = new Option(drug, drug);
-                    drug1Select.appendChild(option1);
-                    drug2Select.appendChild(option2);
-                });
+                availableDrugs = data.drugs;
             } catch (error) {
                 console.error('Error loading drugs:', error);
             }
+        }
+        
+        // Show STITCH ID suggestions
+        function showSuggestions(inputId, query) {
+            if (query.length < 3) {
+                hideSuggestions(inputId);
+                return;
+            }
+            
+            const dropdown = document.getElementById(inputId.replace('Input', 'Dropdown'));
+            dropdown.innerHTML = '';
+            
+            // Filter available drugs based on query
+            const filteredDrugs = availableDrugs.filter(drug => 
+                drug.toLowerCase().includes(query.toLowerCase())
+            ).slice(0, 10); // Limit to 10 suggestions
+            
+            if (filteredDrugs.length > 0) {
+                filteredDrugs.forEach(drug => {
+                    const item = document.createElement('div');
+                    item.className = 'autocomplete-item';
+                    item.textContent = drug;
+                    item.onclick = () => {
+                        document.getElementById(inputId).value = drug;
+                        hideSuggestions(inputId);
+                    };
+                    dropdown.appendChild(item);
+                });
+                dropdown.style.display = 'block';
+            } else {
+                hideSuggestions(inputId);
+            }
+        }
+        
+        function hideSuggestions(inputId) {
+            const dropdown = document.getElementById(inputId.replace('Input', 'Dropdown'));
+            dropdown.style.display = 'none';
+        }
+        
+        // Set up autocomplete event listeners
+        function setupAutocomplete(inputId) {
+            const input = document.getElementById(inputId);
+            
+            input.addEventListener('input', (e) => {
+                const query = e.target.value;
+                
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    showSuggestions(inputId, query);
+                }, 300);
+            });
+            
+            input.addEventListener('blur', () => {
+                // Delay hiding to allow clicks on dropdown items
+                setTimeout(() => hideSuggestions(inputId), 200);
+            });
+            
+            input.addEventListener('focus', () => {
+                if (input.value.length >= 3) {
+                    showSuggestions(inputId, input.value);
+                }
+            });
         }
         
         // Predict interaction
@@ -235,6 +337,13 @@
                 });
                 
                 html += `</div>`;
+            } else if (predictions.system && predictions.system.error) {
+                html += `
+                    <div class="prediction-card">
+                        <h4>🎯 Affected Body System</h4>
+                        <p><em>Unable to predict affected system for this drug combination</em></p>
+                    </div>
+                `;
             }
             
             // Add disclaimer
@@ -248,35 +357,55 @@
             contentDiv.innerHTML = html;
         }
         
+        // Validate STITCH ID format
+        function isValidStitchId(id) {
+            return /^CID\d{9}$/.test(id);
+        }
+        
         // Form submission
         document.getElementById('predictionForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const drug1 = document.getElementById('drug1').value;
-            const drug2 = document.getElementById('drug2').value;
+            const drug1 = document.getElementById('drug1Input').value.trim();
+            const drug2 = document.getElementById('drug2Input').value.trim();
             
             if (!drug1 || !drug2) {
-                alert('Please select both drugs');
+                alert('Please enter both STITCH IDs');
+                return;
+            }
+            
+            if (!isValidStitchId(drug1)) {
+                alert('Please enter a valid STITCH ID format for Drug 1 (e.g., CID000002173)');
+                return;
+            }
+            
+            if (!isValidStitchId(drug2)) {
+                alert('Please enter a valid STITCH ID format for Drug 2 (e.g., CID000003345)');
                 return;
             }
             
             if (drug1 === drug2) {
-                alert('Please select two different drugs');
+                alert('Please enter two different STITCH IDs');
                 return;
             }
             
             const button = document.querySelector('button[type="submit"]');
+            const originalText = button.textContent;
             button.textContent = '🔄 Predicting...';
             button.disabled = true;
             
             await predictInteraction(drug1, drug2);
             
-            button.textContent = '🔍 Predict Interaction';
+            button.textContent = originalText;
             button.disabled = false;
         });
         
-        // Load drugs when page loads
-        loadDrugs();
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDrugs();
+            setupAutocomplete('drug1Input');
+            setupAutocomplete('drug2Input');
+        });
     </script>
 </body>
 </html>
