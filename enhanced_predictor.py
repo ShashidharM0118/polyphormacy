@@ -321,10 +321,17 @@ class AdvancedPolypharmacyPredictor:
         # Combine positive and negative samples
         combined_data = pd.concat([positive_data, negative_data], ignore_index=True)
         
+        # Ensure no NaN values in the target
+        combined_data = combined_data.dropna(subset=['has_side_effect'])
+        
         # Prepare features and target
-        X = combined_data[['STITCH_1_encoded', 'STITCH_2_encoded', 'drug_interaction_score', 
-                          'drug_sum', 'drug_diff']]
-        y = combined_data['has_side_effect']
+        feature_cols = ['STITCH_1_encoded', 'STITCH_2_encoded', 'drug_interaction_score', 
+                       'drug_sum', 'drug_diff']
+        
+        # Check if all feature columns exist
+        available_cols = [col for col in feature_cols if col in combined_data.columns]
+        X = combined_data[available_cols]
+        y = combined_data['has_side_effect'].astype(int)
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(
@@ -393,18 +400,23 @@ class AdvancedPolypharmacyPredictor:
         
         # Generate random pairs that don't exist in the data
         negative_samples = []
-        while len(negative_samples) < n_samples:
+        attempts = 0
+        max_attempts = n_samples * 10  # Prevent infinite loop
+        
+        while len(negative_samples) < n_samples and attempts < max_attempts:
             drug1 = np.random.choice(all_drugs)
             drug2 = np.random.choice(all_drugs)
+            attempts += 1
             
             if drug1 != drug2 and (drug1, drug2) not in existing_pairs:
+                drug1_encoded = self.encoders['stitch1'].transform([drug1])[0]
+                drug2_encoded = self.encoders['stitch2'].transform([drug2])[0]
+                
                 negative_samples.append({
                     'STITCH_1': drug1,
                     'STITCH_2': drug2,
-                    'STITCH_1_encoded': self.encoders['stitch1'].transform([drug1])[0] 
-                        if drug1 in self.encoders['stitch1'].classes_ else -1,
-                    'STITCH_2_encoded': self.encoders['stitch2'].transform([drug2])[0] 
-                        if drug2 in self.encoders['stitch2'].classes_ else -1,
+                    'STITCH_1_encoded': drug1_encoded,
+                    'STITCH_2_encoded': drug2_encoded,
                     'has_side_effect': 0
                 })
         
@@ -416,9 +428,13 @@ class AdvancedPolypharmacyPredictor:
         negative_df['drug_sum'] = negative_df['STITCH_1_encoded'] + negative_df['STITCH_2_encoded']
         negative_df['drug_diff'] = abs(negative_df['STITCH_1_encoded'] - negative_df['STITCH_2_encoded'])
         
+        # Ensure no NaN values
+        negative_df = negative_df.dropna()
+        
         # Add positive label to existing data
         self.data['has_side_effect'] = 1
         
+        print(f"Generated {len(negative_df)} negative samples")
         return negative_df
     
     def train_multiclass_models(self):
