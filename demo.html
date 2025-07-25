@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polypharmacy Drug Interaction Predictor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, input, button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        .result.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .prediction-card {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        .probability-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 5px 0;
+        }
+        .probability-fill {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        .interaction-yes { background-color: #dc3545; }
+        .interaction-no { background-color: #28a745; }
+        .severity-mild { background-color: #ffc107; }
+        .severity-moderate { background-color: #fd7e14; }
+        .severity-severe { background-color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏥 Polypharmacy Drug Interaction Predictor</h1>
+        <p>This tool uses machine learning to predict potential drug interactions and their severity. Select two drugs below to analyze their interaction potential.</p>
+        
+        <form id="predictionForm">
+            <div class="form-group">
+                <label for="drug1">Drug 1:</label>
+                <select id="drug1" required>
+                    <option value="">Select first drug...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="drug2">Drug 2:</label>
+                <select id="drug2" required>
+                    <option value="">Select second drug...</option>
+                </select>
+            </div>
+            
+            <button type="submit">🔍 Predict Interaction</button>
+        </form>
+        
+        <div id="result" class="result">
+            <div id="resultContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:5000';
+        
+        // Load available drugs
+        async function loadDrugs() {
+            try {
+                const response = await fetch(`${API_BASE}/drugs`);
+                const data = await response.json();
+                
+                const drug1Select = document.getElementById('drug1');
+                const drug2Select = document.getElementById('drug2');
+                
+                data.drugs.forEach(drug => {
+                    const option1 = new Option(drug, drug);
+                    const option2 = new Option(drug, drug);
+                    drug1Select.appendChild(option1);
+                    drug2Select.appendChild(option2);
+                });
+            } catch (error) {
+                console.error('Error loading drugs:', error);
+            }
+        }
+        
+        // Predict interaction
+        async function predictInteraction(drug1, drug2) {
+            try {
+                const response = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ drug1, drug2 })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResult(data, true);
+                } else {
+                    displayResult(data, false);
+                }
+            } catch (error) {
+                displayResult({ error: 'Network error: ' + error.message }, false);
+            }
+        }
+        
+        // Display prediction results
+        function displayResult(data, success) {
+            const resultDiv = document.getElementById('result');
+            const contentDiv = document.getElementById('resultContent');
+            
+            resultDiv.className = `result ${success ? 'success' : 'error'}`;
+            resultDiv.style.display = 'block';
+            
+            if (!success) {
+                contentDiv.innerHTML = `<h3>❌ Error</h3><p>${data.error}</p>`;
+                return;
+            }
+            
+            const predictions = data.predictions;
+            let html = `<h3>📊 Prediction Results for ${data.drug_pair}</h3>`;
+            
+            // Binary prediction
+            if (predictions.binary) {
+                const prob = predictions.binary.probability;
+                const hasInteraction = predictions.binary.prediction;
+                const interactionProb = prob.interaction * 100;
+                
+                html += `
+                    <div class="prediction-card">
+                        <h4>🔬 Interaction Probability</h4>
+                        <p><strong>${hasInteraction ? 'INTERACTION DETECTED' : 'NO INTERACTION'}</strong></p>
+                        <p>Interaction Probability: ${interactionProb.toFixed(1)}%</p>
+                        <div class="probability-bar">
+                            <div class="probability-fill ${hasInteraction ? 'interaction-yes' : 'interaction-no'}" 
+                                 style="width: ${interactionProb}%"></div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Severity prediction
+            if (predictions.severity && !predictions.severity.error) {
+                const severityProbs = predictions.severity.probabilities;
+                const predictedSeverity = predictions.severity.prediction;
+                
+                html += `
+                    <div class="prediction-card">
+                        <h4>⚠️ Severity Assessment</h4>
+                        <p><strong>Predicted Severity: ${predictedSeverity.toUpperCase()}</strong></p>
+                `;
+                
+                Object.entries(severityProbs).forEach(([severity, prob]) => {
+                    const percentage = (prob * 100).toFixed(1);
+                    html += `
+                        <p>${severity}: ${percentage}%</p>
+                        <div class="probability-bar">
+                            <div class="probability-fill severity-${severity}" style="width: ${percentage}%"></div>
+                        </div>
+                    `;
+                });
+                
+                html += `</div>`;
+            }
+            
+            // System prediction
+            if (predictions.system && !predictions.system.error) {
+                const systemProbs = predictions.system.probabilities;
+                const predictedSystem = predictions.system.prediction;
+                
+                html += `
+                    <div class="prediction-card">
+                        <h4>🎯 Affected Body System</h4>
+                        <p><strong>Predicted System: ${predictedSystem}</strong></p>
+                `;
+                
+                Object.entries(systemProbs).forEach(([system, prob]) => {
+                    const percentage = (prob * 100).toFixed(1);
+                    html += `<p>${system}: ${percentage}%</p>`;
+                });
+                
+                html += `</div>`;
+            }
+            
+            // Add disclaimer
+            html += `
+                <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px;">
+                    <strong>⚠️ Disclaimer:</strong> This is a machine learning prediction tool for research purposes only. 
+                    Always consult with healthcare professionals for medical advice regarding drug interactions.
+                </div>
+            `;
+            
+            contentDiv.innerHTML = html;
+        }
+        
+        // Form submission
+        document.getElementById('predictionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const drug1 = document.getElementById('drug1').value;
+            const drug2 = document.getElementById('drug2').value;
+            
+            if (!drug1 || !drug2) {
+                alert('Please select both drugs');
+                return;
+            }
+            
+            if (drug1 === drug2) {
+                alert('Please select two different drugs');
+                return;
+            }
+            
+            const button = document.querySelector('button[type="submit"]');
+            button.textContent = '🔄 Predicting...';
+            button.disabled = true;
+            
+            await predictInteraction(drug1, drug2);
+            
+            button.textContent = '🔍 Predict Interaction';
+            button.disabled = false;
+        });
+        
+        // Load drugs when page loads
+        loadDrugs();
+    </script>
+</body>
+</html>

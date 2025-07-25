@@ -12,6 +12,7 @@ import numpy as np
 import joblib
 import json
 import os
+import requests
 from datetime import datetime
 import traceback
 
@@ -62,7 +63,9 @@ class PolypharmacyAPI:
     def load_drug_info(self):
         """Load drug information from processed data"""
         try:
-            data = pd.read_csv('e:/polyphormacy/polypharmacy_data.csv')
+            # Read CSV file, skipping the first line if it starts with #
+            data = pd.read_csv('e:/polyphormacy/polypharmacy_data.csv', sep='\t', skiprows=1)
+            data.columns = ['STITCH_1', 'STITCH_2', 'Side_Effect_Code', 'Side_Effect_Name']
             
             # Create drug information dictionary
             for _, row in data.iterrows():
@@ -89,7 +92,7 @@ class PolypharmacyAPI:
                 interaction = {
                     'partner': drug2,
                     'side_effect': row['Side_Effect_Name'],
-                    'side_effect_code': row['UMLS_CUI_from_text']
+                    'side_effect_code': row['Side_Effect_Code']
                 }
                 
                 self.drug_info[drug1]['interactions'].append(interaction)
@@ -100,7 +103,7 @@ class PolypharmacyAPI:
                 reverse_interaction = {
                     'partner': drug1,
                     'side_effect': row['Side_Effect_Name'],
-                    'side_effect_code': row['UMLS_CUI_from_text']
+                    'side_effect_code': row['Side_Effect_Code']
                 }
                 
                 self.drug_info[drug2]['interactions'].append(reverse_interaction)
@@ -119,7 +122,48 @@ class PolypharmacyAPI:
             print(f"Error loading drug info: {e}")
             self.drug_info = {}
     
-    def predict_interaction(self, drug1, drug2, model_name='random_forest'):
+    def resolve_drug_name(self, drug_name):
+        """Resolve drug name to STITCH ID using STITCH API"""
+        try:
+            url = f"http://stitch.embl.de/api/tsv/resolve?identifier={drug_name}&species=9606"
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                lines = response.text.strip().split('\n')
+                if len(lines) > 1:  # Skip header line
+                    data_line = lines[1].split('\t')
+                    if len(data_line) > 0:
+                        stitch_id = data_line[0]
+                        # Convert to our format (remove the leading "-1.")
+                        if stitch_id.startswith('-1.'):
+                            stitch_id = stitch_id[3:]
+                        return {
+                            'stitch_id': stitch_id,
+                            'preferred_name': data_line[4] if len(data_line) > 4 else drug_name,
+                            'success': True
+                        }
+            
+            return {'success': False, 'error': 'Drug not found in STITCH database'}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to resolve drug name: {str(e)}'}
+
+    def get_drug_suggestions(self, query, limit=10):
+        """Get drug suggestions based on available drugs in our database"""
+        suggestions = []
+        query_lower = query.lower()
+        
+        # First, try to get suggestions from our existing drug database
+        for drug_id in self.drug_info.keys():
+            if query_lower in drug_id.lower():
+                suggestions.append({
+                    'stitch_id': drug_id,
+                    'display_name': drug_id,
+                    'source': 'database'
+                })
+        
+        # Limit results
+        return suggestions[:limit]
         """Predict drug interaction"""
         try:
             # Check if drugs exist in our encoders
@@ -240,32 +284,38 @@ def predict():
         if not drug1 or not drug2:
             return jsonify({'error': 'Both drug1 and drug2 must be provided'}), 400
         
-        # Clean drug names if they start with CID
-        if drug1.startswith('CID'):
-            drug1 = drug1[3:].lstrip('0') if len(drug1) > 3 else drug1
-        if drug2.startswith('CID'):
-            drug2 = drug2[3:].lstrip('0') if len(drug2) > 3 else drug2
-        
         # Check if drugs exist in our encoders
-        drug_encoder = api.encoders.get('drug_a')
-        if not drug_encoder:
-            return jsonify({'error': 'Drug encoder not loaded'}), 500
+        stitch1_encoder = api.encoders.get('stitch1')
+        stitch2_encoder = api.encoders.get('stitch2')
         
-        if drug1 not in drug_encoder.classes_ and f'CID{drug1.zfill(9)}' not in drug_encoder.classes_:
+        if not stitch1_encoder or not stitch2_encoder:
+            return jsonify({'error': 'Drug encoders not loaded'}), 500
+        
+        # Check if drugs exist in either encoder
+        drug1_in_stitch1 = drug1 in stitch1_encoder.classes_
+        drug1_in_stitch2 = drug1 in stitch2_encoder.classes_
+        drug2_in_stitch1 = drug2 in stitch1_encoder.classes_
+        drug2_in_stitch2 = drug2 in stitch2_encoder.classes_
+        
+        if not (drug1_in_stitch1 or drug1_in_stitch2):
             return jsonify({'error': f'Drug {drug1} not found in database'}), 400
-        if drug2 not in drug_encoder.classes_ and f'CID{drug2.zfill(9)}' not in drug_encoder.classes_:
+        if not (drug2_in_stitch1 or drug2_in_stitch2):
             return jsonify({'error': f'Drug {drug2} not found in database'}), 400
         
         # Prepare features
         try:
-            # Use original format if available
-            drug1_encoded = drug1 if drug1 in drug_encoder.classes_ else f'CID{drug1.zfill(9)}'
-            drug2_encoded = drug2 if drug2 in drug_encoder.classes_ else f'CID{drug2.zfill(9)}'
+            # Encode drugs using the appropriate encoder
+            # If drug is in stitch1, use that encoding, otherwise use stitch2
+            drug1_encoded = stitch1_encoder.transform([drug1])[0] if drug1_in_stitch1 else stitch2_encoder.transform([drug1])[0]
+            drug2_encoded = stitch1_encoder.transform([drug2])[0] if drug2_in_stitch1 else stitch2_encoder.transform([drug2])[0]
             
-            # Create feature vector
+            # Create feature vector with engineered features (same as in training)
             features = np.array([[
-                drug_encoder.transform([drug1_encoded])[0],
-                drug_encoder.transform([drug2_encoded])[0]
+                drug1_encoded,
+                drug2_encoded,
+                (drug1_encoded * drug2_encoded) % 10000,  # drug_interaction_score
+                drug1_encoded + drug2_encoded,            # drug_sum
+                abs(drug1_encoded - drug2_encoded)        # drug_diff
             ]])
             
         except Exception as e:
@@ -288,31 +338,37 @@ def predict():
         
         # Severity prediction
         if 'severity' in api.models:
-            severity_pred = api.models['severity'].predict(features)[0]
-            severity_prob = api.models['severity'].predict_proba(features)[0]
-            severity_encoder = api.encoders.get('severity_category')
-            if severity_encoder:
-                severity_classes = severity_encoder.classes_
-                predictions['severity'] = {
-                    'prediction': severity_encoder.inverse_transform([severity_pred])[0],
-                    'probabilities': {
-                        cls: float(prob) for cls, prob in zip(severity_classes, severity_prob)
+            try:
+                severity_pred = api.models['severity'].predict(features)[0]
+                severity_prob = api.models['severity'].predict_proba(features)[0]
+                severity_encoder = api.encoders.get('severity')
+                if severity_encoder:
+                    severity_classes = severity_encoder.classes_
+                    predictions['severity'] = {
+                        'prediction': severity_encoder.inverse_transform([severity_pred])[0],
+                        'probabilities': {
+                            cls: float(prob) for cls, prob in zip(severity_classes, severity_prob)
+                        }
                     }
-                }
+            except Exception as e:
+                predictions['severity'] = {'error': f'Severity prediction failed: {str(e)}'}
         
         # Body system prediction
         if 'system' in api.models:
-            system_pred = api.models['system'].predict(features)[0]
-            system_prob = api.models['system'].predict_proba(features)[0]
-            system_encoder = api.encoders.get('system_category')
-            if system_encoder:
-                system_classes = system_encoder.classes_
-                predictions['system'] = {
-                    'prediction': system_encoder.inverse_transform([system_pred])[0],
-                    'probabilities': {
-                        cls: float(prob) for cls, prob in zip(system_classes, system_prob)
+            try:
+                system_pred = api.models['system'].predict(features)[0]
+                system_prob = api.models['system'].predict_proba(features)[0]
+                system_encoder = api.encoders.get('system')
+                if system_encoder:
+                    system_classes = system_encoder.classes_
+                    predictions['system'] = {
+                        'prediction': system_encoder.inverse_transform([system_pred])[0],
+                        'probabilities': {
+                            cls: float(prob) for cls, prob in zip(system_classes, system_prob)
+                        }
                     }
-                }
+            except Exception as e:
+                predictions['system'] = {'error': f'System prediction failed: {str(e)}'}
         
         return jsonify({
             'drug_pair': f"{drug1} + {drug2}",
